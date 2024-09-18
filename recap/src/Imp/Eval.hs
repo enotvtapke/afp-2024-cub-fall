@@ -2,10 +2,10 @@ module Imp.Eval (Error (..), runProgram) where
 
 import Control.Monad (when)
 import Control.Monad.State
-  ( MonadState (get),
-    MonadTrans (lift),
+  ( MonadTrans (lift),
     StateT,
     evalStateT,
+    gets,
     modify,
   )
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
@@ -26,8 +26,10 @@ type EvalM = StateT VarMap (ExceptT Error IO)
 evalExpr :: Expr -> EvalM Int
 evalExpr (Const x) = return x
 evalExpr (Var name) = do
-  s <- get
-  if M.notMember name s then lift $ throwE (UndefinedVar name) else return $ s M.! name
+  val <- gets $ M.lookup name
+  case val of
+    Just x -> return x
+    Nothing -> lift $ throwE (UndefinedVar name)
 evalExpr (BinOp op lExpr rExpr) = do
   rVal <- evalExpr rExpr
   when (op == Div && rVal == 0) $ lift $ throwE DivByZero
@@ -48,11 +50,11 @@ evalCom (Read s) = do
   case readMaybe line of
     Nothing -> lift $ throwE (ParsingErr line)
     Just val -> modify (M.insert s val)
-evalCom (Write expr) = evalExpr expr >>= (lift . lift . print)
+evalCom (Write expr) = evalExpr expr >>= lift . lift . print
 evalCom (Seq lhs rhs) = evalCom lhs >> evalCom rhs
--- Why doesn't it work?
+-- Now I understand, why it doesn't work.
 -- evalCom (If cond lBranch rBranch) = (\c x y -> if c >= 0 then x else y) <$> evalExpr cond <*> evalCom lBranch <*> evalCom rBranch
-evalCom (If cond lBranch rBranch) = 
+evalCom (If cond lBranch rBranch) =
   do
     c <- evalExpr cond
     if c == 0 then evalCom lBranch else evalCom rBranch
