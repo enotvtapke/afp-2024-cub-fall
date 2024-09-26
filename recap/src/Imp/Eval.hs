@@ -13,6 +13,7 @@ import qualified Data.Map.Strict as M
 import Imp.Lang
 import Text.Printf (printf)
 import Text.Read (readMaybe)
+import Control.Monad.RWS (RWST, evalRWST, asks, tell)
 
 -- Variable mapping; shadowing is allowed
 type VarMap = M.Map String Int
@@ -20,8 +21,11 @@ type VarMap = M.Map String Int
 -- Possible errors reported during evaluation
 data Error = UndefinedVar String | ParsingErr String | DivByZero deriving (Show)
 
+newtype Config = Config { exitOnParsingErr :: Bool }
+
 -- Evaluation monad
-type EvalM = StateT VarMap (ExceptT Error IO)
+-- type EvalM = StateT VarMap (ExceptT Error IO)
+type EvalM = RWST Config [Error] VarMap (ExceptT Error IO)
 
 evalExpr :: Expr -> EvalM Int
 evalExpr (Const x) = return x
@@ -47,8 +51,14 @@ evalCom (Assign varName rhs) = do
   modify (M.insert varName rhsVal)
 evalCom (Read s) = do
   line <- lift $ lift getLine
+  exit <- asks exitOnParsingErr
   case readMaybe line of
-    Nothing -> lift $ throwE (ParsingErr line)
+    Nothing ->
+      if exit
+        then
+          lift $ throwE (ParsingErr line)
+        else
+          tell [ParsingErr line] >> evalCom (Read s)
     Just val -> modify (M.insert s val)
 evalCom (Write expr) = evalExpr expr >>= lift . lift . print
 evalCom (Seq lhs rhs) = evalCom lhs >> evalCom rhs
@@ -63,8 +73,8 @@ evalCom Skip = return ()
 evalProg :: Prog -> EvalM Int
 evalProg (Prog com expr) = evalCom com >> evalExpr expr
 
-eval :: Prog -> VarMap -> IO (Either Error Int)
-eval program state = runExceptT (evalStateT (evalProg program) state)
+eval :: Prog -> VarMap -> IO (Either Error (Int, [Error]))
+eval program state = runExceptT (evalRWST (evalProg program) (Config True) state)
 
 runProgram :: Prog -> IO ()
 runProgram program = do
